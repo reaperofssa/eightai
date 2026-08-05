@@ -1,37 +1,47 @@
-// npm i telegraf
-require('dotenv').config();
+// npm i telegraf axios dotenv
+
+require("dotenv").config();
+
+const axios = require("axios");
 const { Telegraf } = require("telegraf");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const bot = new Telegraf(BOT_TOKEN);
 
 // ===== CONFIG =====
-const MODEL = "gemini-2.5-flash";
 const MAX_HISTORY = 5;
 
-// chat history
+// Store last messages per chat
 const history = new Map();
 
-// ignore AI after quota/rate limit
+// Disable AI if API starts rate limiting
 let aiDisabled = false;
 
+// Save recent messages
 bot.on("message", (ctx, next) => {
     const chatId = ctx.chat.id;
 
-    if (!history.has(chatId)) history.set(chatId, []);
+    if (!history.has(chatId))
+        history.set(chatId, []);
 
-    const arr = history.get(chatId);
+    const messages = history.get(chatId);
 
-    if (ctx.message.text) {
-        arr.push({
-            from: ctx.from.first_name,
-            text: ctx.message.text,
+    let text = "";
+
+    if (ctx.message.text)
+        text = ctx.message.text;
+    else if (ctx.message.caption)
+        text = ctx.message.caption;
+
+    if (text) {
+        messages.push({
+            from: ctx.from.first_name || ctx.from.username || "Unknown",
+            text
         });
 
-        while (arr.length > MAX_HISTORY)
-            arr.shift();
+        while (messages.length > MAX_HISTORY)
+            messages.shift();
     }
 
     return next();
@@ -39,104 +49,107 @@ bot.on("message", (ctx, next) => {
 
 bot.command("yo", async (ctx) => {
 
-    if (aiDisabled) return;
+    if (aiDisabled)
+        return;
 
-    let prompt = ctx.message.text.replace(/^\/yo(@\w+)?/i, "").trim();
+    let prompt = ctx.message.text
+        .replace(/^\/yo(@\w+)?/i, "")
+        .trim();
 
     const context = [];
 
-    // Previous messages
+    // Recent chat history
     const hist = history.get(ctx.chat.id) || [];
 
     if (hist.length) {
-        context.push("Recent chat:");
-        hist.forEach(m => {
-            context.push(`${m.from}: ${m.text}`);
-        });
+        context.push("Recent messages:");
+
+        for (const msg of hist) {
+            context.push(`${msg.from}: ${msg.text}`);
+        }
     }
 
-    // Replied message
+    // Reply context
     if (ctx.message.reply_to_message) {
 
-        const r = ctx.message.reply_to_message;
+        const reply = ctx.message.reply_to_message;
 
-        let replied = "";
-
-        if (r.text)
-            replied = r.text;
-        else if (r.caption)
-            replied = r.caption;
-        else
-            replied = "[non-text message]";
+        const repliedText =
+            reply.text ||
+            reply.caption ||
+            "[Non-text message]";
 
         context.push("");
         context.push("Quoted message:");
-        context.push(`${r.from.first_name}: ${replied}`);
+        context.push(`${reply.from.first_name || "Unknown"}: ${repliedText}`);
     }
 
     if (!prompt)
         prompt = "Reply naturally to the conversation.";
 
     const finalPrompt = `
-You are chatting inside a Telegram group.
+You are an AI assistant inside a Telegram group.
+
+Use the previous conversation if it is relevant.
 
 ${context.join("\n")}
 
-User request:
+User:
 ${prompt}
 `;
 
+    // Show typing immediately
+    await ctx.sendChatAction("typing");
+
+    // Keep refreshing typing every 4 seconds
+    const typingInterval = setInterval(() => {
+        ctx.telegram
+            .sendChatAction(ctx.chat.id, "typing")
+            .catch(() => {});
+    }, 4000);
+
     try {
 
-        const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+        const { data } = await axios.get(
+            "https://apis.davidcyril.name.ng/ai/grok-4.1-fast",
             {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": GEMINI_API_KEY
+                params: {
+                    prompt: finalPrompt
                 },
-                body: JSON.stringify({
-                    contents: [
-                        {
-                            parts: [
-                                {
-                                    text: finalPrompt
-                                }
-                            ]
-                        }
-                    ]
-                })
+                timeout: 60000
             }
         );
 
-        // Disable AI forever if free quota is exhausted
-        if (res.status === 429) {
-            console.log("Gemini quota reached. AI disabled.");
-            aiDisabled = true;
-            return;
-        }
+        clearInterval(typingInterval);
 
-        const data = await res.json();
+        const reply = data?.data || "No response.";
 
-        const text =
-            data.candidates?.[0]?.content?.parts
-                ?.map(x => x.text)
-                .join("")
-            || "No response.";
-
-        await ctx.reply(text, {
+        await ctx.reply(reply, {
             reply_parameters: {
                 message_id: ctx.message.message_id
             }
         });
 
     } catch (err) {
-        console.error(err);
+
+        clearInterval(typingInterval);
+
+        console.error(err.response?.data || err.message);
+
+        // Disable AI if API quota/rate limit is reached
+        if (
+            err.response?.status === 429 ||
+            err.response?.status === 403 ||
+            err.response?.status === 402
+        ) {
+            console.log("AI disabled.");
+            aiDisabled = true;
+        }
+
     }
 
 });
 
 bot.launch();
 
-console.log("Bot started");
+console.log("Bot started.");
