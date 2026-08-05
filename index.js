@@ -1,5 +1,5 @@
 // npm i telegraf
-
+require('dotenv').config();
 const { Telegraf } = require("telegraf");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
