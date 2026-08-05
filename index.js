@@ -81,41 +81,27 @@ bot.on("message", (ctx, next) => {
 
 });
 
-// -------------------- Command --------------------
+// -------------------- AI Response Function --------------------
 
-bot.command("yo", async (ctx) => {
-
-    if (aiDisabled)
-        return;
-
+async function generateAIResponse(ctx, prompt) {
     const chatId = ctx.chat.id;
     const userId = ctx.from.id;
 
-    // Handle simultaneous /yo commands
+    // Handle simultaneous requests
     if (!pendingRequests.has(chatId)) {
         pendingRequests.set(chatId, new Map());
     }
 
     const chatPending = pendingRequests.get(chatId);
 
-    // If user already has a pending request, ignore this one
     if (chatPending.has(userId)) {
         await ctx.reply("⏳ Your previous request is still processing. Please wait.");
         return;
     }
 
-    // Mark this user as having a pending request
     chatPending.set(userId, true);
 
     try {
-
-        let prompt = ctx.message.text
-            .replace(/^\/yo(@\w+)?/i, "")
-            .trim();
-
-        if (!prompt)
-            prompt = "Reply naturally.";
-
         const context = [];
 
         context.push(
@@ -272,17 +258,61 @@ ${prompt}`
         }
 
     } finally {
-        // Remove user from pending requests
         const chatPending = pendingRequests.get(chatId);
         if (chatPending) {
             chatPending.delete(userId);
-            // Clean up empty maps
             if (chatPending.size === 0) {
                 pendingRequests.delete(chatId);
             }
         }
     }
+}
 
+// -------------------- Command --------------------
+
+bot.command("yo", async (ctx) => {
+
+    if (aiDisabled)
+        return;
+
+    let prompt = ctx.message.text
+        .replace(/^\/yo(@\w+)?/i, "")
+        .trim();
+
+    if (!prompt)
+        prompt = "Reply naturally.";
+
+    await generateAIResponse(ctx, prompt);
+
+});
+
+// -------------------- Handle Replies to Bot --------------------
+
+bot.on("message", async (ctx) => {
+    // Check if this is a reply to the bot
+    if (ctx.message.reply_to_message && 
+        ctx.message.reply_to_message.from &&
+        ctx.message.reply_to_message.from.id === bot.botInfo.id) {
+        
+        // Only respond if it's a text message
+        if (!ctx.message.text) return;
+
+        // Don't respond if AI is disabled
+        if (aiDisabled) return;
+
+        // Don't respond if it's a command
+        if (ctx.message.text.startsWith('/')) return;
+
+        // Get the user's message as the prompt
+        let prompt = ctx.message.text.trim();
+        
+        if (!prompt) return;
+
+        // Add context that this is a reply
+        prompt = "This is a reply to your previous message. " + prompt;
+
+        await generateAIResponse(ctx, prompt);
+    }
 });
 
 bot.launch();
