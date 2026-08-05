@@ -135,9 +135,17 @@ async function generateAIResponse(ctx, prompt) {
         const context = [];
 
         context.push(
-            `You are an AI assistant inside a Telegram group.
+            `You are a helpful AI assistant and a member of this Telegram group. You participate in conversations naturally, like a normal group member would.
 
-Each message includes:
+Your personality traits:
+- Friendly, helpful, and engaging
+- Responds naturally to conversations
+- Has a good sense of humor when appropriate
+- Respects other group members
+- Contributes meaningfully to discussions
+- Stays on topic and doesn't spam
+
+You are inside a Telegram group chat. Each message includes:
 - Name
 - Telegram User ID
 
@@ -237,10 +245,11 @@ ${prompt}`
         try {
 
             const { data } = await axios.get(
-                "https://apis.davidcyril.name.ng/ai/gemini-3.1-pro",
+                "https://api.bk9.dev/ai/BK91",
                 {
                     params: {
-                        prompt: finalPrompt
+                        q: finalPrompt,
+                        BK9: "you are a helpful AI assistant and a member of this Telegram group"
                     },
                     timeout: 60000,
                     headers: {
@@ -252,7 +261,8 @@ ${prompt}`
             clearInterval(typing);
 
             const rawReply =
-                data?.data ||
+                data?.BK9 ||
+                data?.response ||
                 "No response.";
 
             // Save bot response to history
@@ -368,5 +378,5 @@ bot.on("message", async (ctx) => {
 bot.launch();
 
 console.log("Bot started.");
-console.log("Using Gemini 3.1 Pro API");
+console.log("Using BK9 API - Telegram Group Member");
 console.log("Requests will be processed sequentially per chat.");
