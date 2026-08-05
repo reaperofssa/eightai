@@ -146,11 +146,13 @@ You are inside a Telegram group chat.
 
 If the user replies to one of YOUR previous messages, continue the same conversation naturally instead of starting over.
 
-IMPORTANT: When referring to a specific noun or entity mentioned in the conversation, always acknowledge and address it properly. Do not ignore nouns that users explicitly reference.`
+IMPORTANT: When referring to a specific noun or entity mentioned in the conversation, always acknowledge and address it properly. Do not ignore nouns that users explicitly reference.
+
+IMPORTANT: The "Recent conversation" section below is background context only, from other group members and possibly unrelated to the current request. Do NOT bring it up, reference it, or comment on it unless the current user request is clearly a continuation of it or explicitly asks about it. Focus your reply on the current user request.`
         );
 
         context.push("");
-        context.push("Recent conversation:");
+        context.push("Recent conversation (background only, may be unrelated):");
 
         const hist = getHistory(ctx.chat.id);
 
@@ -202,7 +204,7 @@ ${repliedText}`
 
         context.push("");
         context.push(
-`Current user request:
+`Current user request (respond to THIS, not the background conversation, unless it is clearly connected):
 ${prompt}`
         );
 
