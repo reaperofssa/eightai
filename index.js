@@ -9,43 +9,76 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// ===== CONFIG =====
-const MAX_HISTORY = 5;
+const MAX_HISTORY = 15;
 
-// Store last messages per chat
 const history = new Map();
 
-// Disable AI if API starts rate limiting
 let aiDisabled = false;
 
-// Save recent messages
-bot.on("message", (ctx, next) => {
-    const chatId = ctx.chat.id;
+// -------------------- Formatting --------------------
 
+function escapeHtml(text = "") {
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function markdownToHtml(text = "") {
+    text = escapeHtml(text);
+
+    text = text.replace(/```([\s\S]*?)```/g, "<pre>$1</pre>");
+    text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+    text = text.replace(/\*\*(.*?)\*\*/gs, "<b>$1</b>");
+    text = text.replace(/\*(.*?)\*/gs, "<i>$1</i>");
+
+    return text;
+}
+
+// -------------------- History --------------------
+
+function getHistory(chatId) {
     if (!history.has(chatId))
         history.set(chatId, []);
 
-    const messages = history.get(chatId);
+    return history.get(chatId);
+}
 
-    let text = "";
+function pushHistory(chatId, entry) {
 
-    if (ctx.message.text)
-        text = ctx.message.text;
-    else if (ctx.message.caption)
-        text = ctx.message.caption;
+    const arr = getHistory(chatId);
+
+    arr.push(entry);
+
+    while (arr.length > MAX_HISTORY)
+        arr.shift();
+
+}
+
+// Save every incoming message
+bot.on("message", (ctx, next) => {
+
+    const text =
+        ctx.message.text ||
+        ctx.message.caption;
 
     if (text) {
-        messages.push({
-            from: ctx.from.first_name || ctx.from.username || "Unknown",
+
+        pushHistory(ctx.chat.id, {
+            isBot: false,
+            id: ctx.from.id,
+            username: ctx.from.username || "",
+            name: ctx.from.first_name || "Unknown",
             text
         });
 
-        while (messages.length > MAX_HISTORY)
-            messages.shift();
     }
 
     return next();
+
 });
+
+// -------------------- Command --------------------
 
 bot.command("yo", async (ctx) => {
 
@@ -56,56 +89,107 @@ bot.command("yo", async (ctx) => {
         .replace(/^\/yo(@\w+)?/i, "")
         .trim();
 
+    if (!prompt)
+        prompt = "Reply naturally.";
+
     const context = [];
 
-    // Recent chat history
-    const hist = history.get(ctx.chat.id) || [];
+    context.push(
+`You are an AI assistant inside a Telegram group.
 
-    if (hist.length) {
-        context.push("Recent messages:");
+Each message includes:
+- Name
+- Telegram User ID
 
-        for (const msg of hist) {
-            context.push(`${msg.from}: ${msg.text}`);
-        }
+Use the IDs to distinguish different people.
+
+If the user replies to one of YOUR previous messages, continue the same conversation naturally instead of starting over.
+
+Never confuse users that have different IDs.`
+    );
+
+    context.push("");
+    context.push("Recent conversation:");
+
+    const hist = getHistory(ctx.chat.id);
+
+    for (const msg of hist) {
+
+        context.push(
+`${msg.isBot ? "Assistant" : "User"}
+Name: ${msg.name}
+ID: ${msg.id}
+${msg.username ? `Username: @${msg.username}` : ""}
+Message:
+${msg.text}
+`
+        );
+
     }
 
     // Reply context
     if (ctx.message.reply_to_message) {
 
-        const reply = ctx.message.reply_to_message;
+        const r = ctx.message.reply_to_message;
 
         const repliedText =
-            reply.text ||
-            reply.caption ||
+            r.text ||
+            r.caption ||
             "[Non-text message]";
 
         context.push("");
-        context.push("Quoted message:");
-        context.push(`${reply.from.first_name || "Unknown"}: ${repliedText}`);
+
+        if (r.from.id === bot.botInfo.id) {
+
+            context.push("IMPORTANT:");
+            context.push("The user is replying to YOUR previous message.");
+            context.push("Continue that conversation.");
+            context.push("");
+
+            context.push("Your previous reply:");
+            context.push(repliedText);
+
+        } else {
+
+            context.push("IMPORTANT:");
+            context.push("The user is replying to another participant.");
+            context.push("");
+
+            context.push(
+`Name: ${r.from.first_name || "Unknown"}
+ID: ${r.from.id}
+${r.from.username ? `Username: @${r.from.username}` : ""}
+
+Message:
+${repliedText}`
+            );
+
+        }
+
     }
 
-    if (!prompt)
-        prompt = "Reply naturally to the conversation.";
+    context.push("");
+    context.push(
+`Current user
 
-    const finalPrompt = `
-You are an AI assistant inside a Telegram group.
+Name: ${ctx.from.first_name}
+ID: ${ctx.from.id}
+${ctx.from.username ? `Username: @${ctx.from.username}` : ""}
 
-Use the previous conversation if it is relevant.
+Request:
+${prompt}`
+    );
 
-${context.join("\n")}
+    const finalPrompt = context.join("\n");
 
-User:
-${prompt}
-`;
-
-    // Show typing immediately
     await ctx.sendChatAction("typing");
 
-    // Keep refreshing typing every 4 seconds
-    const typingInterval = setInterval(() => {
+    const typing = setInterval(() => {
+
         ctx.telegram
             .sendChatAction(ctx.chat.id, "typing")
             .catch(() => {});
+
     }, 4000);
 
     try {
@@ -120,29 +204,42 @@ ${prompt}
             }
         );
 
-        clearInterval(typingInterval);
+        clearInterval(typing);
 
-        const reply = data?.data || "No response.";
+        const rawReply =
+            data?.data ||
+            "No response.";
 
-        await ctx.reply(reply, {
-            reply_parameters: {
-                message_id: ctx.message.message_id
-            }
+        // Save bot response to history
+        pushHistory(ctx.chat.id, {
+            isBot: true,
+            id: bot.botInfo.id,
+            username: bot.botInfo.username,
+            name: bot.botInfo.first_name,
+            text: rawReply
         });
+
+        await ctx.reply(
+            markdownToHtml(rawReply),
+            {
+                parse_mode: "HTML",
+                reply_parameters: {
+                    message_id: ctx.message.message_id
+                }
+            }
+        );
 
     } catch (err) {
 
-        clearInterval(typingInterval);
+        clearInterval(typing);
 
         console.error(err.response?.data || err.message);
 
-        // Disable AI if API quota/rate limit is reached
         if (
             err.response?.status === 429 ||
             err.response?.status === 403 ||
             err.response?.status === 402
         ) {
-            console.log("AI disabled.");
             aiDisabled = true;
         }
 
