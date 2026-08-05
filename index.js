@@ -70,10 +70,7 @@ bot.on("message", (ctx, next) => {
 
         pushHistory(ctx.chat.id, {
             isBot: false,
-            id: ctx.from.id,
-            username: ctx.from.username || "",
-            name: ctx.from.first_name || "Unknown",
-            text
+            text: text
         });
 
     }
@@ -145,15 +142,9 @@ Your personality traits:
 - Contributes meaningfully to discussions
 - Stays on topic and doesn't spam
 
-You are inside a Telegram group chat. Each message includes:
-- Name
-- Telegram User ID
-
-Use the IDs to distinguish different people.
+You are inside a Telegram group chat.
 
 If the user replies to one of YOUR previous messages, continue the same conversation naturally instead of starting over.
-
-Never confuse users that have different IDs.
 
 IMPORTANT: When referring to a specific noun or entity mentioned in the conversation, always acknowledge and address it properly. Do not ignore nouns that users explicitly reference.`
         );
@@ -166,13 +157,8 @@ IMPORTANT: When referring to a specific noun or entity mentioned in the conversa
         for (const msg of hist) {
 
             context.push(
-                `${msg.isBot ? "Assistant" : "User"}
-Name: ${msg.name}
-ID: ${msg.id}
-${msg.username ? `Username: @${msg.username}` : ""}
-Message:
-${msg.text}
-`
+                `${msg.isBot ? "Assistant" : "User"}:
+${msg.text}`
             );
 
         }
@@ -206,11 +192,7 @@ ${msg.text}
                 context.push("");
 
                 context.push(
-                    `Name: ${r.from.first_name || "Unknown"}
-ID: ${r.from.id}
-${r.from.username ? `Username: @${r.from.username}` : ""}
-
-Message:
+`User replied to:
 ${repliedText}`
                 );
 
@@ -220,13 +202,7 @@ ${repliedText}`
 
         context.push("");
         context.push(
-            `Current user
-
-Name: ${ctx.from.first_name}
-ID: ${ctx.from.id}
-${ctx.from.username ? `Username: @${ctx.from.username}` : ""}
-
-Request:
+`Current user request:
 ${prompt}`
         );
 
@@ -268,9 +244,6 @@ ${prompt}`
             // Save bot response to history
             pushHistory(ctx.chat.id, {
                 isBot: true,
-                id: bot.botInfo.id,
-                username: bot.botInfo.username,
-                name: bot.botInfo.first_name,
                 text: rawReply
             });
 
