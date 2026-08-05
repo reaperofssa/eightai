@@ -15,8 +15,9 @@ const history = new Map();
 
 let aiDisabled = false;
 
-// Track pending requests per chat
-const pendingRequests = new Map();
+// Track pending requests per chat - using queue system
+const requestQueues = new Map();
+const processingChats = new Map();
 
 // -------------------- Formatting --------------------
 
@@ -81,25 +82,54 @@ bot.on("message", (ctx, next) => {
 
 });
 
+// -------------------- Queue Processor --------------------
+
+async function processQueue(chatId) {
+    // If already processing this chat, return
+    if (processingChats.get(chatId)) {
+        return;
+    }
+
+    // Get the queue for this chat
+    const queue = requestQueues.get(chatId);
+    if (!queue || queue.length === 0) {
+        return;
+    }
+
+    // Mark as processing
+    processingChats.set(chatId, true);
+
+    try {
+        // Process all items in queue one by one
+        while (queue.length > 0) {
+            const requestItem = queue.shift();
+            const { ctx, prompt } = requestItem;
+            
+            try {
+                await generateAIResponse(ctx, prompt);
+            } catch (err) {
+                console.error("Error processing queued request:", err);
+                // Continue with next request even if one fails
+            }
+        }
+    } finally {
+        // Clear processing flag
+        processingChats.delete(chatId);
+        
+        // Check if new items were added while processing
+        const remainingQueue = requestQueues.get(chatId);
+        if (remainingQueue && remainingQueue.length > 0) {
+            // Process new items
+            processQueue(chatId);
+        }
+    }
+}
+
 // -------------------- AI Response Function --------------------
 
 async function generateAIResponse(ctx, prompt) {
     const chatId = ctx.chat.id;
     const userId = ctx.from.id;
-
-    // Handle simultaneous requests
-    if (!pendingRequests.has(chatId)) {
-        pendingRequests.set(chatId, new Map());
-    }
-
-    const chatPending = pendingRequests.get(chatId);
-
-    if (chatPending.has(userId)) {
-        await ctx.reply("⏳ Your previous request is still processing. Please wait.");
-        return;
-    }
-
-    chatPending.set(userId, true);
 
     try {
         const context = [];
@@ -207,12 +237,15 @@ ${prompt}`
         try {
 
             const { data } = await axios.get(
-                "https://apis.davidcyril.name.ng/ai/grok-4.1-fast",
+                "https://apis.davidcyril.name.ng/ai/gemini-3.1-pro",
                 {
                     params: {
                         prompt: finalPrompt
                     },
-                    timeout: 60000
+                    timeout: 60000,
+                    headers: {
+                        'Accept': 'application/json, text/plain, */*'
+                    }
                 }
             );
 
@@ -255,25 +288,40 @@ ${prompt}`
                 aiDisabled = true;
             }
 
+            // Silently fail - no error message sent to user
+
         }
 
-    } finally {
-        const chatPending = pendingRequests.get(chatId);
-        if (chatPending) {
-            chatPending.delete(userId);
-            if (chatPending.size === 0) {
-                pendingRequests.delete(chatId);
-            }
-        }
+    } catch (err) {
+        console.error("Error in generateAIResponse:", err);
     }
+}
+
+// -------------------- Queue Handler --------------------
+
+function queueRequest(ctx, prompt) {
+    const chatId = ctx.chat.id;
+    
+    // Initialize queue for this chat if it doesn't exist
+    if (!requestQueues.has(chatId)) {
+        requestQueues.set(chatId, []);
+    }
+    
+    // Add request to queue
+    const queue = requestQueues.get(chatId);
+    queue.push({ ctx, prompt });
+    
+    // Start processing the queue
+    processQueue(chatId);
 }
 
 // -------------------- Command --------------------
 
 bot.command("yo", async (ctx) => {
 
-    if (aiDisabled)
-        return;
+    if (aiDisabled) {
+        return; // Silently ignore
+    }
 
     let prompt = ctx.message.text
         .replace(/^\/yo(@\w+)?/i, "")
@@ -282,7 +330,8 @@ bot.command("yo", async (ctx) => {
     if (!prompt)
         prompt = "Reply naturally.";
 
-    await generateAIResponse(ctx, prompt);
+    // Queue the request instead of processing immediately
+    queueRequest(ctx, prompt);
 
 });
 
@@ -311,10 +360,13 @@ bot.on("message", async (ctx) => {
         // Add context that this is a reply
         prompt = "This is a reply to your previous message. " + prompt;
 
-        await generateAIResponse(ctx, prompt);
+        // Queue the request instead of processing immediately
+        queueRequest(ctx, prompt);
     }
 });
 
 bot.launch();
 
 console.log("Bot started.");
+console.log("Using Gemini 3.1 Pro API");
+console.log("Requests will be processed sequentially per chat.");
