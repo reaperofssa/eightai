@@ -22,7 +22,7 @@ const processingChats = new Map();
 
 // ==================== VERIFICATION CONFIG ====================
 
-const verification = false; // <-- master toggle for join-verification system
+const verification = true; // <-- master toggle for join-verification system
 
 const REQUIRED_CHANNEL = "@eightballs"; // channel bot must be admin in, to check membership
 const CHANNEL_JOIN_URL = "https://t.me/eightballs";
@@ -174,7 +174,7 @@ if (verification) {
                     parse_mode: "HTML",
                     reply_markup: {
                         inline_keyboard: [
-                            [{ text: "✅ Click to Verify", url: deepLink }]
+                            [{ text: "Verify", url: deepLink }]
                         ]
                     }
                 }
@@ -203,8 +203,8 @@ if (verification) {
         await ctx.reply(
             `To gain access to the chat, please join our channel below, then tap Verify.`,
             Markup.inlineKeyboard([
-                [Markup.button.url("📢 Join Channel", CHANNEL_JOIN_URL)],
-                [Markup.button.callback("✅ Verify", `check_verify_${targetUserId}`)]
+                [Markup.button.url("Join Channel", CHANNEL_JOIN_URL)],
+                [Markup.button.callback("Verify", `check_verify_${targetUserId}`)]
             ])
         );
     });
