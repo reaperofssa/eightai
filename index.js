@@ -539,9 +539,9 @@ bot.command("whisper", async (ctx) => {
     }
 
     // Build a clickable name tag using a text_mention entity (works even if
-    // the user has no @username, since it links via tg://user?id=).
-    const mentionName = targetUser.first_name || "there";
-    const prefix = `${mentionName} `; // text before the query, mention covers this span
+    // the sender has no @username, since it links via tg://user?id=).
+    const senderName = ctx.from.first_name || "Someone";
+    const prefix = `${senderName} whisper to you\n\n`; // text before the query, mention covers the name span
 
     const text = `${prefix}${query}`;
 
@@ -554,8 +554,8 @@ bot.command("whisper", async (ctx) => {
                 {
                     type: "text_mention",
                     offset: 0,
-                    length: mentionName.length,
-                    user: { id: targetUser.id }
+                    length: senderName.length,
+                    user: { id: ctx.from.id }
                 }
             ]
         });
