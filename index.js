@@ -497,6 +497,46 @@ function queueRequest(ctx, prompt) {
 // Sends an ephemeral message (only the target user + bot can see it) via the
 // Bot API's receiver_user_id parameter. Requires the bot to be a chat admin.
 
+// Every whisper we send carries a hidden marker with both participants'
+// user ids, e.g. <whisper from="111" to="222"/>, wrapped in a spoiler so it
+// doesn't clutter the visible message. That marker is what identifies a
+// message as part of a whisper thread and who its two participants are --
+// see the bot.on("message") handler below.
+const WHISPER_MARKER_RE = /<whisper from="(\d+)" to="(\d+)"\s*\/>/;
+
+function buildWhisperMarker(fromId, toId) {
+    return `<span class="tg-spoiler">&lt;whisper from="${fromId}" to="${toId}"/&gt;</span>`;
+}
+
+function parseWhisperMarker(text) {
+    if (!text) return null;
+    const match = text.match(WHISPER_MARKER_RE);
+    if (!match) return null;
+    return { fromId: Number(match[1]), toId: Number(match[2]) };
+}
+
+async function sendWhisper(ctx, { fromUser, toUserId, body }) {
+    const senderName = fromUser.first_name || "Someone";
+    const prefix = `${senderName} whisper to you\n\n`; // mention entity covers this span
+    const footer = `\n\n${buildWhisperMarker(fromUser.id, toUserId)}`;
+    const text = `${prefix}${body}${footer}`;
+
+    await ctx.telegram.callApi("sendMessage", {
+        chat_id: ctx.chat.id,
+        receiver_user_id: toUserId, // only this user + bot see it
+        text,
+        parse_mode: "HTML",
+        entities: [
+            {
+                type: "text_mention",
+                offset: 0,
+                length: senderName.length,
+                user: { id: fromUser.id }
+            }
+        ]
+    });
+}
+
 bot.command("whisper", async (ctx) => {
     const repliedTo = ctx.message.reply_to_message;
 
@@ -506,7 +546,7 @@ bot.command("whisper", async (ctx) => {
 
     let targetUser = repliedTo ? repliedTo.from : null;
 
-    // Fallback: /whisper <query> <userid> (no reply) — trailing numeric arg is the target id
+    // Fallback: /whisper <query> <userid> (no reply) -- trailing numeric arg is the target id
     if (!targetUser) {
         const parts = rawArgs.split(/\s+/);
         const lastPart = parts[parts.length - 1];
@@ -538,27 +578,8 @@ bot.command("whisper", async (ctx) => {
         return ctx.reply("Usage: reply to a user, then /whisper <query> (or /whisper <query> <userid>)");
     }
 
-    // Build a clickable name tag using a text_mention entity (works even if
-    // the sender has no @username, since it links via tg://user?id=).
-    const senderName = ctx.from.first_name || "Someone";
-    const prefix = `${senderName} whisper to you\n\n`; // text before the query, mention covers the name span
-
-    const text = `${prefix}${query}`;
-
     try {
-        await ctx.telegram.callApi("sendMessage", {
-            chat_id: ctx.chat.id,
-            receiver_user_id: targetUser.id, // only this user + bot see it
-            text,
-            entities: [
-                {
-                    type: "text_mention",
-                    offset: 0,
-                    length: senderName.length,
-                    user: { id: ctx.from.id }
-                }
-            ]
-        });
+        await sendWhisper(ctx, { fromUser: ctx.from, toUserId: targetUser.id, body: query });
     } catch (err) {
         console.error("[whisper] Failed to send ephemeral message:", err.response?.description || err.message);
         // Fall back: if ephemeral messages aren't supported/enabled, let the
@@ -566,6 +587,44 @@ bot.command("whisper", async (ctx) => {
         await ctx.reply("Couldn't send a private whisper (ephemeral messages may not be available here).");
     }
 });
+
+// ---- Relay back-and-forth replies within an active whisper thread ----
+// A reply to an ephemeral message is itself ephemeral -- visible only to
+// the bot and the replier, never to the rest of the group -- so there's
+// nothing to clean up, no delete needed.
+//
+// A message counts as a whisper reply when:
+//   1. it's a reply to a message the bot sent (repliedTo.from.id === bot id)
+//   2. that message carries our <whisper from="X" to="Y"/> marker
+//   3. the replier's id is one of the two ids in that marker
+// That marker is put on every whisper we send, so it's the source of
+// truth for "is this a whisper thread" -- no separate session bookkeeping
+// needed to detect it.
+bot.on("message", async (ctx, next) => {
+    const text = ctx.message.text || "";
+    if (!text || text.startsWith("/")) return next(); // let commands fall through
+
+    const chatType = ctx.chat.type;
+    if (chatType !== "group" && chatType !== "supergroup") return next();
+
+    const repliedTo = ctx.message.reply_to_message;
+    if (!repliedTo || repliedTo.from?.id !== ctx.botInfo.id) return next();
+
+    const marker = parseWhisperMarker(repliedTo.text);
+    if (!marker) return next();
+
+    const { fromId, toId } = marker;
+    if (ctx.from.id !== fromId && ctx.from.id !== toId) return next();
+
+    const partnerId = ctx.from.id === fromId ? toId : fromId;
+
+    try {
+        await sendWhisper(ctx, { fromUser: ctx.from, toUserId: partnerId, body: text });
+    } catch (err) {
+        console.error("[whisper] Failed to relay reply:", err.response?.description || err.message);
+    }
+});
+
 
 // -------------------- Command --------------------
 
