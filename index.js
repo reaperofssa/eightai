@@ -168,8 +168,7 @@ if (verification) {
             const deepLink = `https://t.me/${BOT_USERNAME}?start=verify_${userId}`;
 
             const sent = await ctx.reply(
-                `👋 Welcome, <a href="tg://user?id=${userId}">${escapeHtml(member.first_name || "there")}</a>!\n\n` +
-                `Verify you're human to gain access to the chat..`,
+                `👋 Welcome, <a href="tg://user?id=${userId}">${escapeHtml(member.first_name || "there")}</a> — verify you're human to gain access to the chat.`,
                 {
                     parse_mode: "HTML",
                     reply_markup: {
@@ -236,12 +235,27 @@ if (verification) {
         let unmutedAnywhere = false;
 
         for (const [chatId, pending] of pendingVerification.entries()) {
-            if (pending.has(Number(targetUserId)) || pending.has(targetUserId)) {
+            const entry = pending.get(Number(targetUserId)) || pending.get(targetUserId);
+            if (entry) {
                 try {
                     await unmuteUser(ctx, chatId, targetUserId);
                     unmutedAnywhere = true;
                     pending.delete(Number(targetUserId));
                     pending.delete(targetUserId);
+
+                    if (entry.messageId) {
+                        try {
+                            await ctx.telegram.editMessageText(
+                                chatId,
+                                entry.messageId,
+                                undefined,
+                                "Verified",
+                                { reply_markup: { inline_keyboard: [] } }
+                            );
+                        } catch (err) {
+                            console.error("[verification] Failed to edit group message:", err.message);
+                        }
+                    }
                 } catch (err) {
                     console.error("[verification] Failed to unmute:", err.message);
                 }
