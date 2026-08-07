@@ -3,9 +3,10 @@
 require("dotenv").config();
 
 const axios = require("axios");
-const { Telegraf } = require("telegraf");
+const { Telegraf, Markup } = require("telegraf");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_USERNAME = process.env.BOT_USERNAME; // your bot's @username, no @ — needed for verify deep link
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -18,6 +19,21 @@ let aiDisabled = false;
 // Track pending requests per chat - using queue system
 const requestQueues = new Map();
 const processingChats = new Map();
+
+// ==================== VERIFICATION CONFIG ====================
+
+const verification = true; // <-- master toggle for join-verification system
+
+const REQUIRED_CHANNEL = "@eightballs"; // channel bot must be admin in, to check membership
+const CHANNEL_JOIN_URL = "https://t.me/eightballs";
+
+// pendingVerification: Map<chatId, Map<userId, { messageId }>>
+const pendingVerification = new Map();
+
+function getPending(chatId) {
+    if (!pendingVerification.has(chatId)) pendingVerification.set(chatId, new Map());
+    return pendingVerification.get(chatId);
+}
 
 // -------------------- Formatting --------------------
 
@@ -78,6 +94,168 @@ bot.on("message", (ctx, next) => {
     return next();
 
 });
+
+// ==================== VERIFICATION: MUTE / UNMUTE HELPERS ====================
+
+async function muteUser(ctx, chatId, userId) {
+    await ctx.telegram.restrictChatMember(chatId, userId, {
+        permissions: {
+            can_send_messages: false,
+            can_send_audios: false,
+            can_send_documents: false,
+            can_send_photos: false,
+            can_send_videos: false,
+            can_send_video_notes: false,
+            can_send_voice_notes: false,
+            can_send_polls: false,
+            can_send_other_messages: false,
+            can_add_web_page_previews: false,
+            can_change_info: false,
+            can_invite_users: false,
+            can_pin_messages: false,
+            can_manage_topics: false
+        }
+    });
+}
+
+async function unmuteUser(ctx, chatId, userId) {
+    // Standard member permission set — adjust if your group restricts
+    // media/polls for everyone by default.
+    await ctx.telegram.restrictChatMember(chatId, userId, {
+        permissions: {
+            can_send_messages: true,
+            can_send_audios: true,
+            can_send_documents: true,
+            can_send_photos: true,
+            can_send_videos: true,
+            can_send_video_notes: true,
+            can_send_voice_notes: true,
+            can_send_polls: true,
+            can_send_other_messages: true,
+            can_add_web_page_previews: true,
+            can_change_info: false,
+            can_invite_users: true,
+            can_pin_messages: false,
+            can_manage_topics: false
+        }
+    });
+}
+
+// ==================== VERIFICATION: HANDLERS ====================
+
+if (verification) {
+
+    if (!BOT_USERNAME) {
+        console.warn("[verification] BOT_USERNAME env var not set — deep link button will not work.");
+    }
+
+    // ---- New member joins -> mute + prompt ----
+    bot.on("new_chat_members", async (ctx) => {
+        const chatId = ctx.chat.id;
+
+        for (const member of ctx.message.new_chat_members) {
+            if (member.is_bot) continue; // don't gate other bots
+
+            const userId = member.id;
+
+            try {
+                await muteUser(ctx, chatId, userId);
+            } catch (err) {
+                console.error("[verification] Failed to mute new member:", err.message);
+                continue; // if we can't mute (missing admin rights), don't send a false prompt
+            }
+
+            const deepLink = `https://t.me/${BOT_USERNAME}?start=verify_${userId}`;
+
+            const sent = await ctx.reply(
+                `👋 Welcome, <a href="tg://user?id=${userId}">${escapeHtml(member.first_name || "there")}</a>!\n\n` +
+                `You've been muted until you verify you're human. Tap below to verify.`,
+                {
+                    parse_mode: "HTML",
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: "✅ Click to Verify", url: deepLink }]
+                        ]
+                    }
+                }
+            );
+
+            getPending(chatId).set(userId, { messageId: sent.message_id });
+        }
+    });
+
+    // ---- User DMs the bot via the deep link: /start verify_<userId> ----
+    bot.start(async (ctx) => {
+        const payload = ctx.startPayload; // telegraf parses ?start=XXXX into this
+
+        if (!payload || !payload.startsWith("verify_")) {
+            return ctx.reply("👋 Hi! Nothing to verify right now.");
+        }
+
+        const targetUserId = payload.replace("verify_", "");
+        const clickerId = String(ctx.from.id);
+
+        if (targetUserId !== clickerId) {
+            return ctx.reply("❌ This isn't your verification.");
+        }
+
+        // Confirmed it's the right person -> ask them to join the channel
+        await ctx.reply(
+            `To gain access to the chat, please join our channel below, then tap Verify.`,
+            Markup.inlineKeyboard([
+                [Markup.button.url("📢 Join Channel", CHANNEL_JOIN_URL)],
+                [Markup.button.callback("✅ Verify", `check_verify_${targetUserId}`)]
+            ])
+        );
+    });
+
+    // ---- User taps "Verify" -> check channel membership ----
+    bot.action(/^check_verify_(\d+)$/, async (ctx) => {
+        const targetUserId = ctx.match[1];
+        const clickerId = String(ctx.from.id);
+
+        if (targetUserId !== clickerId) {
+            return ctx.answerCbQuery("This isn't your verification.", { show_alert: true });
+        }
+
+        let member;
+        try {
+            member = await ctx.telegram.getChatMember(REQUIRED_CHANNEL, targetUserId);
+        } catch (err) {
+            console.error("[verification] getChatMember failed:", err.message);
+            return ctx.answerCbQuery("Couldn't check membership right now, try again.", { show_alert: true });
+        }
+
+        const validStatuses = ["member", "administrator", "creator"];
+
+        if (!validStatuses.includes(member.status)) {
+            return ctx.answerCbQuery("You haven't joined the chat.", { show_alert: true });
+        }
+
+        // Joined -> unmute them in every group where they're pending
+        let unmutedAnywhere = false;
+
+        for (const [chatId, pending] of pendingVerification.entries()) {
+            if (pending.has(Number(targetUserId)) || pending.has(targetUserId)) {
+                try {
+                    await unmuteUser(ctx, chatId, targetUserId);
+                    unmutedAnywhere = true;
+                    pending.delete(Number(targetUserId));
+                    pending.delete(targetUserId);
+                } catch (err) {
+                    console.error("[verification] Failed to unmute:", err.message);
+                }
+            }
+        }
+
+        await ctx.answerCbQuery("Verified! You've been unmuted.", { show_alert: true });
+        await ctx.editMessageText("✅ Verification complete — you now have access to the chat.");
+
+        if (!unmutedAnywhere) {
+            console.warn(`[verification] User ${targetUserId} verified but was not found in any pending list.`);
+        }
+    });
+}
 
 // -------------------- Queue Processor --------------------
 
@@ -300,6 +478,81 @@ function queueRequest(ctx, prompt) {
     processQueue(chatId);
 }
 
+// -------------------- /whisper Command --------------------
+// Usage: reply to a user's message with: /whisper <query>
+// Sends an ephemeral message (only the target user + bot can see it) via the
+// Bot API's receiver_user_id parameter. Requires the bot to be a chat admin.
+
+bot.command("whisper", async (ctx) => {
+    const repliedTo = ctx.message.reply_to_message;
+
+    let rawArgs = ctx.message.text
+        .replace(/^\/whisper(@\w+)?/i, "")
+        .trim();
+
+    let targetUser = repliedTo ? repliedTo.from : null;
+
+    // Fallback: /whisper <query> <userid> (no reply) — trailing numeric arg is the target id
+    if (!targetUser) {
+        const parts = rawArgs.split(/\s+/);
+        const lastPart = parts[parts.length - 1];
+
+        if (/^\d+$/.test(lastPart)) {
+            const userId = Number(lastPart);
+            rawArgs = parts.slice(0, -1).join(" ").trim();
+
+            try {
+                const member = await ctx.telegram.getChatMember(ctx.chat.id, userId);
+                targetUser = member.user;
+            } catch (err) {
+                return ctx.reply("Couldn't find that user in this chat.");
+            }
+        }
+    }
+
+    if (!targetUser) {
+        return ctx.reply("Reply to a user's message with /whisper <query>, or use /whisper <query> <userid>.");
+    }
+
+    if (targetUser.is_bot) {
+        return ctx.reply("Can't whisper to a bot.");
+    }
+
+    const query = rawArgs;
+
+    if (!query) {
+        return ctx.reply("Usage: reply to a user, then /whisper <query> (or /whisper <query> <userid>)");
+    }
+
+    // Build a clickable name tag using a text_mention entity (works even if
+    // the user has no @username, since it links via tg://user?id=).
+    const mentionName = targetUser.first_name || "there";
+    const prefix = `${mentionName} `; // text before the query, mention covers this span
+
+    const text = `${prefix}${query}`;
+
+    try {
+        await ctx.telegram.callApi("sendMessage", {
+            chat_id: ctx.chat.id,
+            receiver_user_id: targetUser.id, // only this user + bot see it
+            text,
+            entities: [
+                {
+                    type: "text_mention",
+                    offset: 0,
+                    length: mentionName.length,
+                    user: { id: targetUser.id }
+                }
+            ]
+        });
+    } catch (err) {
+        console.error("[whisper] Failed to send ephemeral message:", err.response?.description || err.message);
+        // Fall back: if ephemeral messages aren't supported/enabled, let the
+        // sender know rather than silently failing.
+        await ctx.reply("Couldn't send a private whisper (ephemeral messages may not be available here).");
+    }
+});
+
 // -------------------- Command --------------------
 
 bot.command("yo", async (ctx) => {
@@ -355,3 +608,4 @@ bot.launch();
 console.log("Bot started.");
 console.log("Using BK9 API - Telegram Group Member");
 console.log("Requests will be processed sequentially per chat.");
+console.log(`Verification system: ${verification ? "ENABLED" : "disabled"}`);
