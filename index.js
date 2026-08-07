@@ -22,7 +22,7 @@ const processingChats = new Map();
 
 // ==================== VERIFICATION CONFIG ====================
 
-const verification = true; // <-- master toggle for join-verification system
+const verification = false; // <-- master toggle for join-verification system
 
 const REQUIRED_CHANNEL = "@eightballs"; // channel bot must be admin in, to check membership
 const CHANNEL_JOIN_URL = "https://t.me/eightballs";
