@@ -1,4 +1,4 @@
-// npm i telegraf axios dotenv
+// npm i telegraf axios bdotenv
 
 require("dotenv").config();
 
