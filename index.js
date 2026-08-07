@@ -6,7 +6,7 @@ const axios = require("axios");
 const { Telegraf, Markup } = require("telegraf");
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const BOT_USERNAME = process.env.BOT_USERNAME; // your bot's @username, no @ — needed for verify deep link
+const BOT_USERNAME = "agentknbot"; // your bot's @username, no @ — needed for verify deep link
 
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -169,7 +169,7 @@ if (verification) {
 
             const sent = await ctx.reply(
                 `👋 Welcome, <a href="tg://user?id=${userId}">${escapeHtml(member.first_name || "there")}</a>!\n\n` +
-                `You've been muted until you verify you're human. Tap below to verify.`,
+                `Verify you're human to gain access to the chat..`,
                 {
                     parse_mode: "HTML",
                     reply_markup: {
